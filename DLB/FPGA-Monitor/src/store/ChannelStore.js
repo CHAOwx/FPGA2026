@@ -32,7 +32,7 @@ export class ChannelStore extends Events {
     this.started = start; this.latestTime = 0;
     this.stats = { frames: 0, tx: 0, seq: null, lost: 0, crc: 0, format: 0, duplicates: 0, reordered: 0 };
     for (const c of this.channels.values()) {
-      c.points = new RingBuffer(this.capacity); c.value = null; c.rawValue = null; c.requested = null; c.seen = false;
+      c.points = new RingBuffer(this.capacity); c.value = null; c.rawValue = null; c.rawBits = null; c.requested = null; c.seen = false;
     }
   }
   ingest(frame) {

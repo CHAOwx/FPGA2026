@@ -65,7 +65,7 @@ describe('state and interaction boundaries', () => {
   it('mock split bytes use real decoder and SET_PARAM echoes through telemetry', async () => {
     vi.useFakeTimers(); const mock = new MockTransport(), decoder = new ProtocolDecoder(), frames = [], errors = [];
     decoder.on('telemetry', f => frames.push(f)); decoder.on('error', e => errors.push(e)); mock.on('bytes', b => decoder.push(b));
-    await mock.open(); await vi.advanceTimersByTimeAsync(100); expect(frames).toHaveLength(5); expect(frames[0].samples).toHaveLength(6);
+    await mock.open(); await vi.advanceTimersByTimeAsync(100); expect(frames).toHaveLength(5); expect(frames[0].samples).toHaveLength(7);
     await mock.write(new ProtocolEncoder().setParam(0x10, 3, -0.5).bytes); await vi.advanceTimersByTimeAsync(20);
     expect(frames.at(-1).samples.find(s => s.sourceId === 0x10).value).toBe(-0.5);
     mock.injectCRCError(); expect(errors[0].kind).toBe('CRC'); await mock.close(); await vi.advanceTimersByTimeAsync(100); expect(frames).toHaveLength(6);

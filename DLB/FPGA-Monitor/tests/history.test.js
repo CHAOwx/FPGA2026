@@ -58,4 +58,15 @@ describe('durable batched sessions', () => {
     const first = h.stop(), second = h.stop(); expect(first).toBe(second); await first;
     expect((await h.list())[0].frames).toBe(1); expect(h.session).toBeNull();
   });
+  it('retains exceptional FLOAT32 bits in history/CSV while finite bucket extrema recover after NaN', async () => {
+    const { h, store } = await setup(); const s = await h.start(store.channels, 0);
+    const { TYPE } = await import('../src/protocol/ProtocolConstants.js');
+    const { decode, rawNumber } = await import('../src/protocol/ValueCodec.js');
+    [0x7fc01234, 0x7f800000, 0xff800000, 0xbf800000, 0x3e800000].forEach((rawBits, seq) => store.ingest({ seq,
+      hostReceiveTime: seq * 20, samples: [{ sourceId: 0x20, type: TYPE.FLOAT32, rawBits, rawValue: rawNumber(TYPE.FLOAT32, rawBits), value: decode(TYPE.FLOAT32, rawBits) }] }));
+    await h.stop(); const rows = await h.page(s.id);
+    expect(rows[0].samples[0]).toMatchObject({ rawBits: 0x7fc01234, value: NaN });
+    const window = await h.window(s.id, 0, 1, 1); expect(window.get(0x20).map(p => p.value)).toEqual([-1, 0.25]);
+    const csv = await (await h.csv((await h.list())[0])).text(); expect(csv).toContain('FLOAT32'); expect(csv).toContain('NaN'); expect(csv).toContain('"1048576000","0.25"');
+  });
 });

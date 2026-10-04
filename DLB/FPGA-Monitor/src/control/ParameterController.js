@@ -5,7 +5,7 @@
  * Public API: send(), drag(), finish(), cancel(); control UI calls these with human values.
  * Architecture invariants: At most one drag send per 50 ms; final edit sends immediately; no ACK invented.
  */
-import { encode, decode, rawNumber, typeName } from '../protocol/ValueCodec.js';
+import { encode, decode, rawText, typeName } from '../protocol/ValueCodec.js';
 import { hexId } from '../protocol/ProtocolConstants.js';
 export class ParameterController {
   constructor(store, encoder, getTransport, logger, onError) {
@@ -25,7 +25,7 @@ export class ParameterController {
     c.requested = target;
     try {
       await transport.write(encoded.bytes); this.store.stats.tx++;
-      this.logger.add('TX', `SET_PARAM SEQ=${encoded.seq} ID=${hexId(id)} TYPE=${typeName(c.type)} RAW=${rawNumber(c.type, encoded.rawBits)} VALUE=${target.value}`, encoded.bytes);
+      this.logger.add('TX', `SET_PARAM SEQ=${encoded.seq} ID=${hexId(id)} TYPE=${typeName(c.type)} RAW=${rawText(c.type, encoded.rawBits)} VALUE=${target.value}`, encoded.bytes);
     } catch (error) { if (c.requested === target) c.requested = null; throw error; }
   }
   drag(id, value) {
