@@ -216,3 +216,58 @@ npm run dev
 本轮修改ChartController、ConfigStore默认Palette、main.css、index.html、两个图表测试、README、ARCHITECTURE、两份实现报告，并重新构建dist，根目录Claude_Change.md记录完整变更。git status中的MyPID.v、Test.v、parameter_manager.v、telemetry_param_mux.v、两个PID构建/测试脚本和pid_uart_tb.sv属于已有变更，本轮未编辑；遵循现有忽略规则，未更改.gitignore、提交或推送。
 
 边界：自由导航只显示当前有限缓存/暂停快照/已加载历史窗口的数据；缓存外或未加载的历史区段需要Record及历史窗口加载。LIVE中的坐标随接收时间前进，固定时刻检查请使用PAUSE。尚未联调真实FPGA或电机，本轮Demo/生产浏览器测试不代表硬件已验证。没有未完成TODO。
+
+## 2026-10-03：面板折叠、协议 HEX 分组与 FLOAT32
+
+本轮在现有工程内增量修改，完整读取了 README、ARCHITECTURE、AGENTS、原任务书、所有 src 及测试。保持 Vanilla JS / ECharts / Web Serial / IndexedDB 模块边界，不改 FPGA Frame 格式或共享板端协议资料。
+
+交付内容：
+
+- Channels / Parameter Control 独立折叠为 34px 窄栏，标题栏箭头保留恢复入口，侧栏滚动时标题保持可见；Communication Log 折叠为 38px 标题栏。CSS Grid 自动释放宽度，底部高度让给 Waveform。ChartController 的 ResizeObserver 执行 resize 并 invalidate，PAUSE / history 也正确刷新，保留模式和导航范围。
+- ConfigStore 增加 leftPanelCollapsed / rightPanelCollapsed / logPanelCollapsed / groupedHex 四个布尔字段。仍使用原 v1 Key/version，旧配置先合并默认值再验证；不清除原通道、轴、颜色、可写和范围设置。初次使用全展开、分组开启，刷新后恢复状态。
+- 新增 logger/FrameDisplay.js：纯函数返回 data/separator segments 和字段 tooltip。Telemetry 参数严格 6 Byte 一组，SET_PARAM Payload 一组；未知消息 Payload 不猜测，缺损 LEN/COUNT 安全回退。该层不解码 VALUE、不验证 CRC、不处理流恢复、不修改原始 bytes。FrameLogger 保留原 hex 和展示快照，AppController 渲染深色 HEX / 蓝灰辅助逗号。协议分组可切换 Raw，并保存；Copy Raw HEX 和单条 HEX 选区复制均不含辅助逗号。容量继续为 2000 条日志、最多 150 条 DOM，折叠仍接收日志。
+- TYPE.FLOAT32=0x05，通过 ValueCodec 中 DataView 的小端 getFloat32/setFloat32 集中转换。VALUE 始终 4 Byte；rawValue 保留 unsigned bits 兼容 DB/CSV，通道和 TX 日志显示 RAW 十六进制位模式。Slider/Numeric Input 发送 float32，Requested 使用舍入后的数值、TYPE/rawBits 回读比较。
+- FLOAT32 写入拒绝非有限数值和溢出；RX 的 NaN/Infinity 保留并显示，图表安全转换成 null 空缺，有限极值与空缺参与容量受限降采样。修复历史时间桶以 NaN 开头时后续有限极值不能更新的问题，仍每桶最多两点，原记录数据保持不变。
+- Demo 增加 Channel 0x20 的 -1～+1 缓慢 FLOAT32 正弦，仍统一默认命名、默认不可写；用户配置 Writable 后沿用真实 Encoder/Decoder 回读链路。原六通道及其类型/功能保留。
+
+确定字节参考：`1.0f` VALUE=`00 00 80 3F`；`0.25f` VALUE=`00 00 80 3E`。SEQ=0x23、ID=0x20 的 SET_PARAM 为 `A5 5A 01 10 23 00 06 00 20 05 00 00 80 3E 97 3E`，CRC=0x3E97。SEQ=7、单参数 FLOAT32=1 的 Telemetry 为 `A5 5A 01 01 07 00 07 00 01 20 05 00 00 80 3F 3A 9D`。原整数/Q/CRC/LEN/SEQ 实现继续使用。
+
+### 验证结果
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm.cmd run test` | **11 个文件，123 项全部通过**；含原 86 项及 FLOAT32、分组、配置、resize、非有限值和历史恢复测试 |
+| FLOAT32 Codec | 0、1、-1、0.25、3.1415926、-12.5、0.2、-0；确定 bits/LE 字节、合理 round-trip tolerance、有限边界、subnormal/下溢、异常 TX 拒绝 |
+| Frame / 参数 | 确定 Telemetry / SET_PARAM 字节与 CRC，FLOAT32 Telemetry 全部 chunk 边界，NaN payload bits 保留、后续有限帧恢复，可写门控、Mock 回读同步和非法输入不发送 |
+| 分组与持久化 | 参数每组 6 Byte、SET_PARAM 一组、原字节不变、CRC 诊断保留坏字节、缺损数据 fallback、未知消息整组、COUNT=0/255、旧 v1 默认兼容、8 种状态和 Raw 偏好恢复 |
+| 实际 Chrome Demo | `tests/panels-browser.js` 双尺寸、全部 8 种折叠组合 PASS；Canvas/ECharts 尺寸等于容器，无页面横向/纵向溢出、无重叠，PAUSE/history 模式不变，刷新恢复状态 |
+| Log / FLOAT32 UI | 数据颜色 rgb(38,52,69)，逗号 rgb(124,145,165)；字段 tooltip、分组/Raw、按钮和选区 Raw 复制；FLOAT32 类型与 RAW bits、右 Y、数字输入和真实键盘滑块发送、SYNCED、越界拒绝、CSV/历史、CRC 注入通过 |
+| 异常浮点实际 RX | 测试会话对 Mock 源码响应注入 IEEE bits，经过实际串口流解析/Store/UI/Recorder；NaN、±Infinity 显示正常、ECharts data 安全 null、随后0.25恢复，IndexedDB 保留三个异常位模式，pageerror=[] |
+| 既有鼠标导航回归 | `tests/chart-browser.js` 双尺寸 PASS：三轴鼠标锚点缩放、单轴缩放、自由平移、回起点、负时间空白、LIVE更新、PAUSE快照、记录和历史均通过 |
+| 最终 production build | **成功，606 modules**；入口6.83kB、CSS8.63kB、应用JS46.64kB；ECharts530.59kB（gzip180.27kB）沿用现有体积提示，无构建错误 |
+| 生产 preview / Chrome | `tests/production-browser.js` 双尺寸全部组合 PASS；阻断外部HTTP请求，FLOAT32与Q16.16发送回读、LIVE Canvas持续更新、PAUSE Canvas冻结但SEQ增长、resize/持久化/日志分组正常，pageerror=[] |
+
+图表尺寸（CSS px，ECharts 实测一致）：
+
+| 视口 | 全展开 | 仅左收起 | 仅右收起 | 左右收起 | 仅日志收起 | 全收起 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1920×1080 | 1372×630 | 1598×630 | 1608×630 | 1834×630 | 1372×802 | 1834×802 |
+| 1366×768 | 878×358 | 1074×358 | 1084×358 | 1280×358 | 878×490 | 1280×490 |
+
+### 文件、复现与证据
+
+新增：`src/logger/FrameDisplay.js`、`tests/float32.test.js`、`tests/frameDisplay.test.js`、`tests/panels-browser.js`、`tests/production-browser.js`。修改 AppController、ChartController、ParameterController、FrameLogger、ValueCodec、ProtocolConstants、MockTransport、ChannelStore、ConfigStore、HistoryStore、main.css、index.html、既有 chart/state/history 测试、README、ARCHITECTURE 和本报告，重新生成 dist。根目录 Claude_Change.md 记录本轮清单。
+
+运行方式保持 README 所述 `npm.cmd run dev`（5173）、`npm.cmd run test`、`npm.cmd run build`、`npm.cmd run preview`（4173）。浏览器脚本使用独立上下文，会清空该测试上下文配置并产生 Demo 记录，禁止用于正在记录真实实验的会话。可通过 Playwright CLI 的 `run-code --filename=<脚本绝对路径>` 运行。本机 CLI 后台会话启动失败，实际验收由工作区已有 Playwright 库通过 `Claude_Temp/run-monitor-browser.cjs` 启动同一实际 Chrome 完成，未新增/全局安装依赖。示例：
+
+```powershell
+node Claude_Temp/run-monitor-browser.cjs DLB/FPGA-Monitor/tests/panels-browser.js
+node Claude_Temp/run-monitor-browser.cjs DLB/FPGA-Monitor/tests/chart-browser.js monitor-chart-regression.json
+node Claude_Temp/run-monitor-browser.cjs DLB/FPGA-Monitor/tests/production-browser.js monitor-production.json
+```
+
+这些命令在工作区根目录运行，dev/preview 需预先启动。临时工具与证据统一在 `Claude_Temp/`，不参与生产运行：`fpga-browser-output/monitor-upgrade.json`、`monitor-chart-regression.json`、`monitor-production.json`，`panels-expanded-1920.png`、`panels-expanded-1366.png`、`panels-collapsed-1920.png`、`panels-collapsed-1366.png`、`monitor-production-1920.png`、`monitor-production-1366.png`、`float32-1920.csv`、`float32-1366.csv`。已实际查看布局截图和导出 CSV。遵循本轮“不提问”要求保留临时验收证据。
+
+开始时 git status 干净；结束时另见 `DLB/DLB/DLB.srcs/sources_1/new/protocol_rx.v` 修改及 `DLB/CODEX_TASK.md`、`DLB/PID_UART_README.md`、`DLB/pendulum_overview.mmd` 删除。本轮工具未编辑这些路径，未恢复、覆盖或提交这些任务期间出现的其他变更。未 commit / push。
+
+边界：本轮未接入真实 FPGA/STM32 UART 或电机，板端 FLOAT32 支持需设备自行按协议实现；Demo、Streams 和 Chrome 验收证明 PC 链路。Edge 未单独测试。FLOAT32 精度按 IEEE-754 舍入，resolution 返回最小 subnormal 间隔，不代表全范围恒定精度；历史混合桶继续保留有限 min/max，纯异常桶由图表显示空缺。容量及数据库版本保持现有约束。

@@ -30,7 +30,7 @@
 | serial/SerialTransport.js | Web Serial 所有权、授权、8N1、字节读写、串行写队列、锁释放、连接状态 |
 | serial/MockTransport.js | 虚拟设备，合法 Telemetry 分块输入，验证 SET_PARAM 并在 Telemetry 里回读 |
 | protocol/CRC16.js | 无状态 CRC 计算 |
-| protocol/ValueCodec.js | 符号、补码、量化、类型边界、未知类型 fallback |
+| protocol/ValueCodec.js | 符号、补码、Q 量化、FLOAT32 IEEE-754 小端转换与 RAW 位显示、类型边界、未知类型 fallback |
 | protocol/ProtocolEncoder.js | 唯一 SET_PARAM 编码入口，TX SEQ；Telemetry frame helper 仅给 Mock/测试用 |
 | protocol/ProtocolDecoder.js | 有限内部流缓冲、同步、LEN/COUNT/版本/CRC 校验，frame / telemetry / error 事件 |
 | store/ChannelStore.js | ID Map、最新数据、seen、请求回读状态、SEQ 统计、每通道有限 RingBuffer |
@@ -38,7 +38,8 @@
 | chart/ChartController.js | 单图、25 FPS、双 Y、DataZoom、统一 Tooltip、实时/暂停/历史视图 |
 | control/ParameterController.js | 用户范围 / 可写检查、50ms 节流、最后值发送、Requested RAW 及 Telemetry 同步 |
 | recorder/HistoryStore.js | Session、批量事务、Stop flush、失败保留批次、窗口查询、分页 CSV、删除/重命名 |
-| logger/FrameLogger.js | 最多 2000 条记录，Raw HEX，独立于数据记录 |
+| logger/FrameLogger.js | 最多 2000 条记录，原始 HEX 和不可变展示快照，独立于数据记录 |
+| logger/FrameDisplay.js | 纯展示格式化函数；V1 字段分组与标签，未知 Payload 整组、缺损数据 Raw fallback；无 CRC / 流解码 / DOM / VALUE 转换 |
 | app/AppController.js | 组合上述模块，DOM 与用户事件，每 200ms 更新 UI/日志 |
 | core/Events.js | 无跨层依赖的轻量订阅机制 |
 
@@ -48,7 +49,13 @@
 
 ## 存储 Schema v1
 
-`fpga-monitor-config-v1` 的顶层为 `{version:1, channels:{[decimalId]:config}, ui:{baud,timeWindow,left,right,logFilters}}`。channel config 只包含 name/unit/visible/color/axis/writable/sliderMin/sliderMax/sliderStep。首次发现自动保存默认配置；设备实际类型以每次 Telemetry 为准。不序列化 SerialPort、实时值或实验数据。
+`fpga-monitor-config-v1` 的顶层为 `{version:1, channels:{[decimalId]:config}, ui:{baud,timeWindow,left,right,logFilters,leftPanelCollapsed,rightPanelCollapsed,logPanelCollapsed,groupedHex}}`。本次兼容扩展只新增四个布尔 UI 字段；加载旧 v1 时先合并默认值（面板 false、groupedHex true），再验证，不更换 Key / version，不清除旧通道配置。channel config 只包含 name/unit/visible/color/axis/writable/sliderMin/sliderMax/sliderStep。首次发现自动保存默认配置；设备实际类型以每次 Telemetry 为准。不序列化 SerialPort、实时值或实验数据。
+
+Protocol V1 的 TYPE.FLOAT32=0x05，VALUE 仍为 4 Byte unsigned 原始 bits。ValueCodec 用 DataView 在 float32 与 bits 间转换；rawValue 保存 unsigned bits 以兼容现有 DB/CSV，UI/TX 日志通过 rawText 显示十六进制位模式。写入只接受有限值和有限 float32 范围，Requested 以编码后的 float32 解码值及 rawBits 跟踪；RX 保留 NaN/Infinity。ChartController 在降采样时保留有限极值和异常空缺，送入 ECharts 前把不可绘制值变为 null；Store 和 Recorder 中的样本保持原值。历史桶不会让首个异常值阻止后续有限极值更新，仍保持每桶最多两点。DB Schema 不变。
+
+面板状态只由 AppController 读写 ConfigStore，通过 CSS Grid 列宽和日志高度释放空间；两侧保留 34px 恢复窄边、日志保留 38px 标题。ChartController 的 ResizeObserver 负责 chart.resize 和 invalidate，PAUSE/history 下也刷新尺寸，禁止 ChartController 管理折叠状态。折叠不会停止通道接收、可写回读或 Recorder；折叠日志只暂停 DOM 重建，FrameLogger 持续保留最近记录。
+
+FrameLogger 保留原始 hex 并调用 FrameDisplay 创建展示 segments，不修改 Frame/bytes，不重复协议核心校验。AppController 只创建 data/separator span 和 tooltip，协议逗号不进入原始 hex；Copy Raw HEX 使用原始 hex，单条 HEX 选区复制过滤展示分隔符。分组/Raw 视图和过滤器仍受 2000 条记录、150 条 DOM 限制。扩展 MSG_TYPE 的展示布局只修改 FrameDisplay，不能给 Decoder 增加 DOM 依赖。
 
 `fpga-monitor-db-v1`，IndexedDB version=1：
 

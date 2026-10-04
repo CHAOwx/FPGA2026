@@ -10,7 +10,7 @@ import { MockTransport } from '../serial/MockTransport.js';
 import { ProtocolDecoder } from '../protocol/ProtocolDecoder.js';
 import { ProtocolEncoder } from '../protocol/ProtocolEncoder.js';
 import { hexId, MSG } from '../protocol/ProtocolConstants.js';
-import { typeName, supported } from '../protocol/ValueCodec.js';
+import { typeName, supported, rawText } from '../protocol/ValueCodec.js';
 import { ConfigStore, validateUI } from '../store/ConfigStore.js';
 import { ChannelStore, channelConfig } from '../store/ChannelStore.js';
 import { FrameLogger } from '../logger/FrameLogger.js';
@@ -107,10 +107,34 @@ export class AppController {
     this.$('history-load').onclick = this.act(() => this.loadHistory());
     this.$('history-position').onchange = this.act(async () => { this.$('history-start').value = this.$('history-position').value; await this.loadHistory(); });
     this.$('inject-crc').onclick = () => this.transport?.injectCRCError();
+    for (const side of ['left', 'right', 'log']) this.$(`toggle-${side}-panel`).onclick = () => {
+      const key = `${side}PanelCollapsed`;
+      this.config.saveUI({ [key]: !this.config.data.ui[key] }); this.restoreUI();
+    };
+    this.$('grouped-hex').onchange = () => this.config.saveUI({ groupedHex: this.$('grouped-hex').checked });
+    this.$('logs').addEventListener('copy', event => {
+      const selection = window.getSelection();
+      const anchor = selection?.anchorNode;
+      const hex = (anchor?.nodeType === Node.ELEMENT_NODE ? anchor : anchor?.parentElement)?.closest('.log-hex');
+      if (hex && hex.contains(selection.focusNode) && event.clipboardData) {
+        event.clipboardData.setData('text/plain', selection.toString().replaceAll(',', '').trim()); event.preventDefault();
+      }
+    });
     this.$('clear-log').onclick = () => this.logger.clear();
     this.$('log-filters').onchange = () => this.config.saveUI({ logFilters: [...this.$('log-filters').querySelectorAll('input:checked')].map(i => i.value) });
   }
   restoreUI() {
+    const ui = this.config.data.ui;
+    for (const side of ['left', 'right', 'log']) {
+      const collapsed = ui[`${side}PanelCollapsed`], button = this.$(`toggle-${side}-panel`);
+      this.root.classList.toggle(`${side}-panel-collapsed`, collapsed);
+      button.textContent = side === 'left' ? (collapsed ? '▶' : '◀') : side === 'right' ? (collapsed ? '◀' : '▶') : (collapsed ? '▼' : '▲');
+      button.setAttribute('aria-expanded', String(!collapsed));
+      button.setAttribute('aria-label', `${collapsed ? '展开' : '折叠'} ${side === 'left' ? 'Channels' : side === 'right' ? 'Parameter Control' : 'Communication Log'}`);
+      button.title = button.getAttribute('aria-label');
+    }
+    this.$('channels').hidden = ui.leftPanelCollapsed; this.$('parameter-body').hidden = ui.rightPanelCollapsed;
+    this.$('logs').hidden = ui.logPanelCollapsed; this.$('grouped-hex').checked = ui.groupedHex;
     this.$('baud').value = this.config.data.ui.baud;
     for (const btn of this.$('windows').children) btn.classList.toggle('selected', Number(btn.dataset.window) === this.config.data.ui.timeWindow);
     for (const input of this.$('log-filters').querySelectorAll('input')) input.checked = this.config.data.ui.logFilters.includes(input.value);
@@ -185,7 +209,7 @@ export class AppController {
       slider.setAttribute('aria-label', `${c.name} Slider`);
       const range = node('div', 'range-labels'); range.append(node('span', '', String(c.sliderMin)), node('span', '', String(c.sliderMax)));
       const input = node('input'); input.type = 'number'; input.step = 'any'; input.min = c.sliderMin; input.max = c.sliderMax; input.setAttribute('aria-label', `${c.name} Numeric Input`);
-      input.value = c.value ?? c.sliderMin; slider.value = input.value;
+      input.value = Number.isFinite(c.value) ? c.value : c.sliderMin; slider.value = input.value;
       const sync = node('div', 'sync', '通过下一帧 Telemetry 确认');
       const numeric = () => {
         if (!input.value.trim()) return this.error(new Error('参数不能为空'));
@@ -206,14 +230,14 @@ export class AppController {
       const row = this.channelNodes.get(c.sourceId);
       if (row) {
         row.value.replaceChildren(document.createTextNode(numberText(c.value)), node('small', '', c.unit));
-        row.meta.textContent = `${hexId(c.sourceId)} · ${typeName(c.type)} · ${c.axis.toUpperCase()} · RAW ${c.rawValue ?? '—'}`;
+        row.meta.textContent = `${hexId(c.sourceId)} · ${typeName(c.type)} · ${c.axis.toUpperCase()} · RAW ${rawText(c.type, c.seen ? c.rawBits : null)}`;
       }
       const controls = this.controlNodes.get(c.sourceId); if (!controls) continue;
       const { slider, input, actual, sync, type } = controls;
       slider.disabled = input.disabled = !this.transport?.connected || !c.seen || !supported(c.type);
       type.textContent = `${hexId(c.sourceId)} · ${typeName(c.type)}`;
-      actual.textContent = `Actual ${numberText(c.value)} ${c.unit} · RAW ${c.rawValue ?? '—'}`;
-      if (!c.requested && document.activeElement !== input && document.activeElement !== slider) { input.value = c.value ?? c.sliderMin; slider.value = input.value; }
+      actual.textContent = `Actual ${numberText(c.value)} ${c.unit} · RAW ${rawText(c.type, c.seen ? c.rawBits : null)}`;
+      if (!c.requested && document.activeElement !== input && document.activeElement !== slider) { input.value = Number.isFinite(c.value) ? c.value : c.sliderMin; slider.value = input.value; }
       if (!c.requested) { sync.textContent = supported(c.type) ? '通过 Telemetry 回读同步' : typeName(c.type); sync.className = 'sync'; }
       else {
         sync.textContent = `Requested ${numberText(c.requested.value)} · ${c.requested.synced ? '✓ SYNCED' : performance.now() - c.requested.at > 2000 ? '未同步' : '等待 Telemetry'}`;
@@ -240,13 +264,24 @@ export class AppController {
     }
   }
   renderLogs() {
-    const signature = `${this.logger.revision}:${this.config.data.ui.logFilters.join()}`;
+    if (this.config.data.ui.logPanelCollapsed) return;
+    const signature = `${this.logger.revision}:${this.config.data.ui.logFilters.join()}:${this.config.data.ui.groupedHex}`;
     if (signature === this.logSignature) return; this.logSignature = signature;
     const container = this.$('logs'); const bottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
     const fragment = document.createDocumentFragment();
     for (const entry of this.logger.filtered(this.config.data.ui.logFilters)) {
       const row = node('div', `log-entry ${entry.direction}`); const content = node('span', 'log-summary', entry.summary);
-      if (entry.hex) content.append(node('span', 'log-hex', entry.hex));
+      if (entry.hex) {
+        const hex = node('span', 'log-hex');
+        if (this.config.data.ui.groupedHex) for (const segment of entry.segments) {
+          const part = node('span', `hex-${segment.type}`, segment.text);
+          if (segment.label) part.title = segment.label;
+          hex.append(part);
+        } else hex.textContent = entry.hex;
+        const copy = node('button', 'copy-hex', 'Copy Raw HEX');
+        copy.onclick = this.act(() => navigator.clipboard.writeText(entry.hex));
+        content.append(hex, copy);
+      }
       const localTime = new Date(entry.time).toLocaleTimeString('zh-CN', { hour12: false }) + '.' + entry.time.slice(20, 23);
       row.append(node('span', 'log-time', localTime), node('span', 'log-dir', entry.direction), content); fragment.append(row);
     }

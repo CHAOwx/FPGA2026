@@ -14,14 +14,17 @@ const grid = { left: 70, right: 70, top: 42, bottom: 78 };
 export function decimate(points, budget = 3000) {
   if (points.length <= budget) return points;
   const result = [];
-  const step = Math.ceil(points.length / (budget / 2));
+  const gaps = points.some(p => !Number.isFinite(p.value));
+  const step = Math.ceil(points.length / (budget / (gaps ? 3 : 2)));
   for (let i = 0; i < points.length; i += step) {
-    let min = points[i], max = points[i];
-    for (let j = i + 1; j < Math.min(i + step, points.length); j++) {
-      if (points[j].value < min.value) min = points[j];
-      if (points[j].value > max.value) max = points[j];
+    let min = null, max = null, gap = null;
+    for (let j = i; j < Math.min(i + step, points.length); j++) {
+      const p = points[j];
+      if (!Number.isFinite(p.value)) { gap ??= p; continue; }
+      if (!min || p.value < min.value) min = p;
+      if (!max || p.value > max.value) max = p;
     }
-    result.push(...(min === max ? [min] : min.time <= max.time ? [min, max] : [max, min]));
+    result.push(...[...new Set([min, max, gap])].filter(Boolean).sort((a, b) => a.time - b.time));
   }
   return result;
 }
@@ -29,7 +32,7 @@ export class ChartController {
   constructor(element, store, config, onMode) {
     Object.assign(this, { element, store, config, onMode });
     this.chart = echarts.init(element, null, { renderer: 'canvas' }); this.mode = 'live'; this.dirty = true;
-    this.resize = new ResizeObserver(() => this.chart.resize()); this.resize.observe(element);
+    this.resize = new ResizeObserver(() => { this.chart.resize(); this.invalidate(); }); this.resize.observe(element);
     this.xView = null; this.yView = [null, null];
     this.chart.on('datazoom', () => {
       const zoom = this.chart.getOption().dataZoom?.[0];
@@ -163,7 +166,7 @@ export class ChartController {
         : this.mode === 'pause' ? (this.frozen.get(c.sourceId) ?? []).filter(p => p.time >= min && p.time <= max) : c.points.values(min, max);
       return { id: String(c.sourceId), name: c.name + (c.unit ? ` [${c.unit}]` : ''), type: 'line', yAxisIndex: c.axis === 'right' ? 1 : 0,
         showSymbol: false, connectNulls: false, animation: false, lineStyle: { width: 1.5, color: c.color }, itemStyle: { color: c.color },
-        data: decimate(points).map(p => [p.time, p.value]) };
+        data: decimate(points).map(p => [p.time, Number.isFinite(p.value) ? p.value : null]) };
     });
     const axis = (a, name, position, view) => ({ type: 'value', name, position, scale: true,
       min: view?.min ?? (a.mode === 'manual' ? a.min : null), max: view?.max ?? (a.mode === 'manual' ? a.max : null),

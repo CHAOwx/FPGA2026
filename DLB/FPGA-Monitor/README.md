@@ -24,7 +24,7 @@ build 生成 `dist/`；preview 可检查生产产物。请通过本地 HTTP 服�
 
 ## 无 FPGA 的 Demo
 
-点击顶部 **Demo Mode**，立即产生 50 Hz 合法 Protocol V1 Telemetry，自动出现 6 个通道。波形含阶跃、正弦和衰减信号；三条 Q16.16 通道用于测试参数写入。名称统一为 `Channel 0xNN`，默认均不可写。将任意通道设为 Writable 后可以发送参数，Demo 会在下一次 Telemetry 回读新 RAW。点击 **Demo CRC 测试** 注入一帧错误 CRC；顶部 CRC 增加，日志显示期望值、接收值和 HEX，后续帧正常解析，Lost 增加 1。
+点击顶部 **Demo Mode**，立即产生 50 Hz 合法 Protocol V1 Telemetry，自动出现 7 个通道。波形含阶跃、正弦和衰减信号；三条 Q16.16 通道用于测试参数写入，`Channel 0x20` 是 -1～+1 的缓慢 FLOAT32 正弦。名称统一为 `Channel 0xNN`，默认均不可写。将任意通道设为 Writable 后可以发送参数，Demo 会在下一次 Telemetry 回读新 RAW；FLOAT32 的完整正弦范围可将 Slider Min/Max 设为 -1/1，配到 Right Y 更容易观察。点击 **Demo CRC 测试** 注入一帧错误 CRC；顶部 CRC 增加，日志显示期望值、接收值和 HEX，后续帧正常解析，Lost 增加 1。
 
 ## 连接真实 FPGA
 
@@ -51,6 +51,16 @@ build 生成 `dist/`；preview 可检查生产产物。请通过本地 HTTP 服�
 拖动 Slider 最多约 20 Hz 发送，松开立即发送最终值。Numeric Input 与 Slider 联动，在数字框按 **Enter** 发送，采用类型量化后的值作为 Requested。输入空值、NaN、Infinity、类型溢出、超出用户配置范围不会发送；INT32/UINT32 必须是整数。范围 Step 决定滑块刻度，数字框允许任意合法数值。
 
 例如 Q16.16 输入 `0.25`，RAW=16384，Payload=`10 03 00 40 00 00`（此例 ID=0x10）。TX 日志显示实际完整 HEX、SEQ、类型、RAW 与数值。只有后续 Telemetry 的 TYPE 和 RAW 与请求相同才显示 **✓ SYNCED**；2 秒后仍不一致显示 **未同步**。没有独立 ACK，也不会自动重试参数。
+
+FLOAT32 使用 IEEE-754 single precision（32 bit、小端），不经过 Q 格式量化。ID=0x20 输入 `0.25` 时 Payload=`20 05 00 00 80 3E`，RAW 显示位模式 `0x3E800000`；Requested 使用实际 float32 舍入后的数值。写入拒绝 NaN、Infinity、-Infinity 和 FLOAT32 范围溢出，极小有限数值可以下溢为零。接收的异常浮点仍显示、记录和保留 RAW，图表以空缺处理；后续有限值继续绘制。
+
+## 面板与通信日志
+
+Channels、Parameter Control 标题栏箭头可独立折叠，折叠后保留 34px 窄边和展开按钮；Communication Log 折叠后保留标题栏。Waveform 自动利用释放的宽度和高度，ECharts 监听容器尺寸并 resize，LIVE / PAUSE / 历史及当前导航范围保持不变。箭头支持键盘操作，侧栏滚动时标题栏保持可见。
+
+三个面板状态与“协议分组”开关统一由 ConfigStore 保存，刷新后恢复。旧 v1 配置自动补默认值：面板全部展开，协议分组开启；已有通道和轴设置继续保留。
+
+日志默认按 Header、Version、MSG_TYPE、SEQ、Payload Length、Payload、CRC16 分组；Telemetry Payload 先显示 COUNT，随后每个参数恰好 6 Byte 一组，SET_PARAM 的 6 Byte Payload 是一组。HEX 使用正文色，辅助逗号使用蓝灰色；悬停分组显示字段含义。取消 **协议分组** 可看连续 Raw HEX；每条日志的 **Copy Raw HEX** 始终复制原始 HEX 字节、不含逗号，选中单条 HEX 复制也会去掉辅助逗号。未知消息 Payload 保持整组，长度/COUNT 不完整的诊断日志安全回退到 Raw HEX；分组不执行 CRC 验证、不改变原始帧或实验记录。折叠日志仍继续接收日志，最多 2000 条，展开后显示最近 150 条。
 
 ## 示波器
 
@@ -86,7 +96,7 @@ CSV 为 UTF-8（带 BOM）、CRLF、标准双引号转义，列：
 | channelId | 两位 HEX ID |
 | channelName | Session 保存的通道名称 |
 | type | 类型名称，未知类型保留说明 |
-| raw | signed RAW（INT32 / Q）或 unsigned RAW（UINT32 / 未知） |
+| raw | signed RAW（INT32 / Q）或 unsigned 原始 bits（UINT32 / FLOAT32 / 未知）；FLOAT32 此列不是浮点值 |
 | value | 解码值，负数和小数直接保留；未知类型空值 |
 | hostReceiveTime | 页面 performance.now() 毫秒，帧完成接收时刻 |
 | hostTimestamp | Session 开始墙钟时间加相对时间的 ISO 时间 |
@@ -107,8 +117,9 @@ TELEMETRY `0x01`：`COUNT uint8` 后重复 `PARAM_ID uint8 + DATA_TYPE uint8 + V
 | UINT32 | 0x02 | unsigned int32 |
 | Q16.16 | 0x03 | signed RAW / 65536 |
 | Q8.24 | 0x04 | signed RAW / 16777216 |
+| FLOAT32 | 0x05 | IEEE-754 single precision，32 bit，Little Endian |
 
-所有转换只在 ValueCodec；编码采用 Math.round，正好半 LSB 时遵循 JavaScript 向正无穷的舍入规则。SEQ 65535→0 自然溢出，统计前向间隔中的 Lost；重复和旧帧不制造 65535 个丢帧。设备复位后请断开再连接以重置统计基准。主机时间不是 FPGA 采样时间；倒立摆Test顶层每20ms对两环最近控制量、实测值和系数整帧锁存，其他仅直接使用逐参数锁存TX的顶层需自行保证采样一致性。
+所有转换只在 ValueCodec；整数/Q 编码采用 Math.round，正好半 LSB 时遵循 JavaScript 向正无穷的舍入规则。FLOAT32 使用 DataView 的 getFloat32/setFloat32 小端转换，VALUE 仍固定 4 Byte，不改变 Frame/LEN/CRC 结构。`1.0f` 位模式 `0x3F800000`，UART VALUE=`00 00 80 3F`；`0.25f` 为 `00 00 80 3E`。STM32 发送 float32 时也必须遵守上述小端顺序。SEQ 65535→0 自然溢出，统计前向间隔中的 Lost；重复和旧帧不制造 65535 个丢帧。设备复位后请断开再连接以重置统计基准。主机时间不是 FPGA 采样时间；倒立摆Test顶层每20ms对两环最近控制量、实测值和系数整帧锁存，其他仅直接使用逐参数锁存TX的顶层需自行保证采样一致性。
 
 ## 常见问题
 
@@ -117,7 +128,7 @@ TELEMETRY `0x01`：`COUNT uint8` 后重复 `PARAM_ID uint8 + DATA_TYPE uint8 + V
 | 无法选串口 | 使用 localhost / HTTPS 的 Chrome / Edge；检查授权及设备是否被其他软件占用 |
 | 已连接无通道 | 确认烧录了 Protocol V1 TX 顶层、波特率一致，检查串口方向与板端文档 |
 | CRC / Format 增长 | 检查波特率、LE、CRC 范围、COUNT/LEN 与线路质量；坏帧不会更新参数 |
-| 小数与输入稍有差异 | Q 格式量化；例如 0.2 在 Q16.16 回读约 0.199996948 |
+| 小数与输入稍有差异 | Q 格式量化或 FLOAT32 精度舍入；例如 0.2 在 Q16.16 回读约 0.199996948，在 FLOAT32 回读约 0.200000003 |
 | 显示未同步 | FPGA 是否允许该 ID/TYPE、是否将更新后的参数加入 Telemetry；日志查看 TX 与 RAW |
 | 刷新配置不见 | 核对浏览器、主机、端口；隐私模式 / 清除站点数据可能清掉本地数据 |
 | 历史不可用 | 查看 ERR；检查 IndexedDB 权限、磁盘配额；实时监视和日志仍可运行 |

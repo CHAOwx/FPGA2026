@@ -7,7 +7,7 @@
  */
 import { Events } from '../core/Events.js';
 import { makeTelemetry } from '../protocol/ProtocolEncoder.js';
-import { MSG } from '../protocol/ProtocolConstants.js';
+import { MSG, TYPE } from '../protocol/ProtocolConstants.js';
 import { crc16 } from '../protocol/CRC16.js';
 export class MockTransport extends Events {
   connected = false;
@@ -26,6 +26,7 @@ export class MockTransport extends Events {
       { sourceId: 0x10, type: 3, value: 0.25 },
       { sourceId: 0x11, type: 3, value: 0.2 },
       { sourceId: 0x12, type: 3, value: -0.05 },
+      { sourceId: 0x20, type: TYPE.FLOAT32, value: Math.sin(t * 0.8) },
     ].map(s => this.overrides.has(s.sourceId) ? { ...s, ...this.overrides.get(s.sourceId) } : s);
     const frame = makeTelemetry(this.seq++ & 0xffff, samples);
     if (corrupt) frame[frame.length - 1] ^= 0x80;

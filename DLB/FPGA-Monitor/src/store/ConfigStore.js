@@ -9,6 +9,7 @@ export const CONFIG_KEY = 'fpga-monitor-config-v1';
 export const PALETTE = ['#1479c9', '#15966d', '#d28418', '#8552c1', '#d33b76', '#088b9c', '#4968ce', '#997c14'];
 const defaults = () => ({ version: 1, channels: {}, ui: {
   baud: 115200, timeWindow: 10, logFilters: ['RX', 'TX', 'ERR', 'WARN'],
+  leftPanelCollapsed: false, rightPanelCollapsed: false, logPanelCollapsed: false, groupedHex: true,
   left: { mode: 'auto', min: -1, max: 1 }, right: { mode: 'auto', min: -1, max: 1 },
 } });
 export function validateChannel(c) {
@@ -26,6 +27,9 @@ export function validateUI(ui) {
     if (!a || !['auto', 'manual'].includes(a.mode) || ![a.min, a.max].every(Number.isFinite) || a.min >= a.max) throw new Error('Y 轴要求有限 Min < Max');
   }
   if (!Array.isArray(ui.logFilters) || ui.logFilters.some(f => !['RX', 'TX', 'ERR', 'WARN'].includes(f))) throw new Error('日志过滤配置无效');
+  for (const key of ['leftPanelCollapsed', 'rightPanelCollapsed', 'logPanelCollapsed', 'groupedHex']) {
+    if (typeof ui[key] !== 'boolean') throw new Error('面板或 HEX 显示配置无效');
+  }
   return ui;
 }
 export class ConfigStore {

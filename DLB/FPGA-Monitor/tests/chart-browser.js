@@ -22,7 +22,7 @@ async page => {
     if (await page.locator('#stop').count() && await page.locator('#stop').isEnabled()) await page.locator('#stop').click();
     await page.setViewportSize({ width, height }); await page.goto('http://127.0.0.1:5173/');
     await page.evaluate(() => localStorage.clear()); await page.reload(); await page.locator('#demo').click();
-    await page.waitForFunction(() => document.querySelector('#channel-count').textContent === '6');
+    await page.waitForFunction(() => document.querySelector('#channel-count').textContent === '7');
     await page.locator('.channel[data-id="16"] button').click();
     await page.locator('#channel-form select[name="axis"]').selectOption('right');
     await page.locator('#channel-form input[name="writable"]').check();

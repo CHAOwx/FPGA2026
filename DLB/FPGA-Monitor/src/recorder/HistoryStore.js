@@ -142,7 +142,10 @@ export class HistoryStore extends Events {
           const p = { time: frame.time, value: s.value };
           const pair = groups.get(bucket);
           if (!pair) groups.set(bucket, [p, p]);
-          else { if (p.value < pair[0].value) pair[0] = p; if (p.value > pair[1].value) pair[1] = p; }
+          else if (Number.isFinite(p.value)) {
+            if (!Number.isFinite(pair[0].value) || p.value < pair[0].value) pair[0] = p;
+            if (!Number.isFinite(pair[1].value) || p.value > pair[1].value) pair[1] = p;
+          }
         }
         cursor.continue();
       };

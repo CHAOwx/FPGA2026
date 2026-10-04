@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
-import { ChartController } from '../src/chart/ChartController.js';
+import { ChartController, decimate } from '../src/chart/ChartController.js';
 import { ConfigStore } from '../src/store/ConfigStore.js';
 import { ChannelStore } from '../src/store/ChannelStore.js';
 vi.mock('echarts/core', () => ({ use: () => {}, init: () => ({
@@ -34,7 +34,7 @@ const valuesAt = (x, y) => [controller.chart.convertFromPixel({ xAxisIndex: 0 },
   ...[0, 1].map(yAxisIndex => controller.chart.convertFromPixel({ yAxisIndex }, y))];
 beforeEach(() => {
   vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1)); vi.stubGlobal('cancelAnimationFrame', vi.fn());
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { constructor(callback) { this.callback = callback; } observe() {} disconnect() {} });
   vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
   element = { dataset: {}, clientHeight: 500, clientWidth: 1000, classList: { add: vi.fn(), remove: vi.fn() },
     getBoundingClientRect: () => ({ left: 100, top: 50 }), addEventListener: vi.fn(), removeEventListener: vi.fn() };
@@ -146,5 +146,25 @@ describe('VOFA-style chart navigation', () => {
   it('dispose removes global gesture listeners', () => {
     controller.dispose(); expect(window.removeEventListener).toHaveBeenCalledWith('pointermove', controller.pointerMove);
     expect(element.removeEventListener).toHaveBeenCalledWith('wheel', controller.wheel, true);
+  });
+  it('panel resize resizes ECharts and invalidates a paused viewport without changing navigation', () => {
+    controller.pause(); slider(6, 11); controller.render(); controller.dirty = false;
+    controller.resize.callback(); expect(controller.chart.resize).toHaveBeenCalledTimes(1); expect(controller.dirty).toBe(true);
+    expect(controller.mode).toBe('pause'); expect(controller.timeRange()).toEqual({ min: 6, max: 11 });
+  });
+  it('non-finite RX values produce gaps in live, pause and history without poisoning stored values', () => {
+    receive(2, 12, NaN); receive(3, 13, Infinity); receive(4, 14, -Infinity); receive(5, 15, 1);
+    for (const mode of ['live', 'pause', 'history']) {
+      if (mode === 'pause') controller.pause();
+      if (mode === 'history') controller.showHistory({ channels: { 1: { ...store.channels.get(1) } } }, new Map([[1, store.channels.get(1).points.values()]]), 10, 15);
+      controller.render(); expect(controller.chart.option.series[0].data).toEqual([[10, 10], [11, 11], [12, null], [13, null], [14, null], [15, 1]]);
+      expect(controller.chart.option.tooltip.formatter([{ axisValue: 13 }])).toContain('—');
+    }
+    expect(store.channels.get(1).points.values()[2].value).toBeNaN();
+  });
+  it('bounded decimation preserves finite spikes and invalid gaps even at bucket starts', () => {
+    const points = Array.from({ length: 20000 }, (_, time) => ({ time, value: time % 20 === 0 ? NaN : time === 10001 ? 1000 : time === 10002 ? -1000 : 0 }));
+    const data = decimate(points); expect(data.length).toBeLessThanOrEqual(3000);
+    expect(data.some(p => !Number.isFinite(p.value))).toBe(true); expect(data.some(p => p.value === 1000)).toBe(true); expect(data.some(p => p.value === -1000)).toBe(true);
   });
 });
